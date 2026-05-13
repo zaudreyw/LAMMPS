@@ -1,0 +1,37 @@
+{
+  "name": "lammps-plugin",
+  "version": "0.2.0",
+  "description": "LAMMPS-authoring plugin: lammps-rag MCP + lammps-validate MCP + input-file self-verification Stop hook.",
+  "author": {
+    "name": "LAMMPS Agent Project"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "lammps",
+    "molecular-dynamics"
+  ],
+  "mcpServers": {
+    "lammps-rag": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--script",
+        "${CLAUDE_PLUGIN_ROOT}/scripts/lammps_rag_mcp.py"
+      ],
+      "env": {
+        "LAMMPS_VECTOR_DB_DIR": "/data/shared/lammps_agent_data/data/vector_db"
+      }
+    },
+    "lammps-validate": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--script",
+        "${CLAUDE_PLUGIN_ROOT}/scripts/lammps_validate_mcp.py"
+      ],
+      "env": {}
+    }
+  }
+}

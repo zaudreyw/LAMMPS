@@ -13,6 +13,8 @@ from typing import Any
 
 from .constants import (
     CONTAINER_GEOS_PRIMER_PATH,
+    CONTAINER_LAMMPS_LIB_DIR,
+    CONTAINER_LAMMPS_VECTOR_DB_DIR,
     CONTAINER_MCP_CONFIG_PATH,
     CONTAINER_PLUGIN_DIR,
     CONTAINER_SETTINGS_PATH,
@@ -232,3 +234,158 @@ def build_claude_native_env(
         # container-visible GEOS_VECTOR_DB_DIR used by the MCP server.
         env["HOST_GEOS_VECTOR_DB_DIR"] = str(vector_db_dir)
     return env
+
+
+# ---------------------------------------------------------------------------
+# LAMMPS-specific docker command builders
+# (additive — the GEOS functions above are unchanged)
+# ---------------------------------------------------------------------------
+
+def build_lammps_native_command(
+    *,
+    lammps_lib_dir: Path,
+    result_dir: Path,
+    plugin_dir: Path | None,
+    vector_db_dir: Path | None,
+    model: str,
+    system_prompt: str,
+    prompt: str,
+    enable_plugin: bool = True,
+) -> list[str]:
+    cmd = [
+        "docker", "run", "--rm",
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "-v", f"{lammps_lib_dir}:{CONTAINER_LAMMPS_LIB_DIR}:ro",
+        "-v", f"{result_dir}:/workspace:rw",
+    ]
+    if enable_plugin:
+        if plugin_dir is None or vector_db_dir is None:
+            raise ValueError("plugin_dir and vector_db_dir required when enable_plugin=True")
+        cmd += [
+            "-v", f"{plugin_dir}:/plugins/repo3:ro",
+            "-v", f"{vector_db_dir}:{CONTAINER_LAMMPS_VECTOR_DB_DIR}:rw",
+        ]
+    cmd += [
+        "-e", "HOME=/workspace/.claude_home",
+        "-e", "XDG_CONFIG_HOME=/workspace/.claude_home/.config",
+        "-e", "UV_CACHE_DIR=/workspace/.uv_cache",
+        "-e", "ANTHROPIC_BASE_URL",
+        "-e", "ANTHROPIC_AUTH_TOKEN",
+        "-e", "ANTHROPIC_API_KEY",
+        "-e", "OPENROUTER_API_KEY",
+        "-e", "OPENAI_API_KEY",
+        # Forwards for LAMMPS hook knobs
+        "-e", "LAMMPS_HOOK_DISABLE",
+        "-e", "LAMMPS_HOOK_MAX_RETRIES",
+        "-e", "LAMMPS_HOOK_SELF_REFLECT",
+        "-e", "LAMMPS_HOOK_LAMMPS_CHECK",
+        "-e", "LAMMPS_BINARY",
+    ]
+    if enable_plugin:
+        cmd += [
+            "-e", "LAMMPS_VECTOR_DB_DIR",
+            "-e", "EXCLUDED_GT_IN_FILENAMES",
+            "-e", "EXCLUDED_RST_PATHS",
+            "-e", f"CLAUDE_PLUGIN_ROOT={CONTAINER_PLUGIN_DIR}",
+        ]
+    cmd += [
+        DOCKER_IMAGE,
+        "claude",
+        "-p",
+        "--verbose",
+        "--model", model,
+        "--append-system-prompt", system_prompt,
+        "--tools", NATIVE_CLAUDE_TOOLS,
+    ]
+    for disallowed in NATIVE_CLAUDE_DISALLOWED_TOOLS:
+        cmd += ["--disallowedTools", disallowed]
+    if enable_plugin:
+        cmd += [
+            f"--mcp-config={CONTAINER_MCP_CONFIG_PATH}",
+            "--strict-mcp-config",
+            "--settings", str(CONTAINER_SETTINGS_PATH),
+        ]
+    cmd += [
+        "--output-format", "stream-json",
+        "--permission-mode", "bypassPermissions",
+        "--",
+        prompt,
+    ]
+    return cmd
+
+
+def build_lammps_native_env(
+    *,
+    blocked_in_filenames: list[str],
+    blocked_rst_relpaths: list[str],
+    vector_db_dir: Path | None,
+) -> dict[str, str]:
+    env = os.environ.copy()
+    env["ANTHROPIC_BASE_URL"] = os.environ.get(
+        "ANTHROPIC_BASE_URL",
+        "https://openrouter.ai/api",
+    )
+    if vector_db_dir is not None:
+        env["LAMMPS_VECTOR_DB_DIR"] = str(CONTAINER_LAMMPS_VECTOR_DB_DIR)
+        env["EXCLUDED_GT_IN_FILENAMES"] = json.dumps(blocked_in_filenames)
+        env["EXCLUDED_RST_PATHS"] = json.dumps(blocked_rst_relpaths)
+        if not env.get("OPENROUTER_API_KEY") and env.get("ANTHROPIC_AUTH_TOKEN"):
+            env["OPENROUTER_API_KEY"] = env["ANTHROPIC_AUTH_TOKEN"]
+        env["HOST_LAMMPS_VECTOR_DB_DIR"] = str(vector_db_dir)
+    return env
+
+
+def preflight_lammps_mcp(
+    *,
+    result_dir: Path,
+    plugin_dir: Path,
+    vector_db_dir: Path,
+    timeout: int = 180,
+) -> dict[str, Any]:
+    """Warm the uv script env and confirm the LAMMPS RAG MCP server can open its DB."""
+    cmd = [
+        "docker", "run", "--rm",
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "-v", f"{result_dir}:/workspace:rw",
+        "-v", f"{plugin_dir}:/plugins/repo3:ro",
+        "-v", f"{vector_db_dir}:{CONTAINER_LAMMPS_VECTOR_DB_DIR}:rw",
+        "-e", "HOME=/workspace/.claude_home",
+        "-e", "UV_CACHE_DIR=/workspace/.uv_cache",
+        "-e", "CLAUDE_PLUGIN_ROOT=/plugins/repo3",
+        "-e", f"LAMMPS_VECTOR_DB_DIR={CONTAINER_LAMMPS_VECTOR_DB_DIR}",
+        DOCKER_IMAGE,
+        "uv",
+        "run",
+        "--script",
+        str(CONTAINER_PLUGIN_DIR / "scripts" / "lammps_rag_mcp.py"),
+        "--smoke",
+    ]
+    started = time.time()
+    completed = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout,
+    )
+    result = {
+        "command": cmd,
+        "exit_code": completed.returncode,
+        "elapsed_seconds": round(time.time() - started, 1),
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "updated": datetime.now().isoformat(),
+    }
+    (result_dir / "mcp_preflight.json").write_text(json.dumps(result, indent=2))
+    if completed.returncode != 0:
+        detail = "\n".join(
+            part.strip()
+            for part in (completed.stdout, completed.stderr)
+            if part.strip()
+        )
+        raise RuntimeError(
+            "LAMMPS RAG MCP preflight failed. "
+            "Rebuild the Docker image or check the vector DB path. "
+            f"Details: {detail or 'no output'}"
+        )
+    return result

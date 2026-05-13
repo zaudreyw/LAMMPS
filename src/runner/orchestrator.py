@@ -23,6 +23,8 @@ from .claude_settings import (
     _safe_write_json,
     write_claude_mcp_config,
     write_claude_settings,
+    write_lammps_claude_settings,
+    write_lammps_mcp_config,
 )
 from .constants import (
     CONTAINER_GEOS_PRIMER_PATH,
@@ -31,6 +33,7 @@ from .constants import (
     CONTAINER_VECTOR_DB_DIR,
     DEFAULT_CLAUDE_MODEL,
     DEFAULT_GEOS_PRIMER_PATH,
+    DEFAULT_LAMMPS_LIB_DIR,
     DEFAULT_PLUGIN_DIR,
     DEFAULT_VECTOR_DB_DIR,
     DOCKER_IMAGE,
@@ -40,8 +43,11 @@ from .constants import (
 from .docker_cmd import (
     build_claude_native_command,
     build_claude_native_env,
+    build_lammps_native_command,
+    build_lammps_native_env,
     create_runtime_vector_db_copy,
     preflight_claude_native_mcp,
+    preflight_lammps_mcp,
     remove_workspace_geos_primer,
 )
 from .events import (
@@ -84,10 +90,13 @@ def run_task(
     claude_model: str | None = None,
     tmp_geos_parent: Path | None = None,
     geos_lib_dir: Path | None = None,
+    lammps_lib_dir: Path | None = None,
     extra_blocked_xml_basenames: list[str] | None = None,
     supervisor_spec_dir: Path | None = None,
 ) -> dict:
+    lammps_mode = bool(AGENTS.get(agent_key, {}).get("lammps_mode", False))
     geos_root = (geos_lib_dir if geos_lib_dir is not None else GEOS_LIB_DIR).resolve()
+    lammps_root = (lammps_lib_dir if lammps_lib_dir is not None else DEFAULT_LAMMPS_LIB_DIR).resolve()
     agent = AGENTS[agent_key]
     task_dir = experiments_dir / task_name
     result_dir = agent["results_dir"] / run_name / task_name
@@ -101,7 +110,8 @@ def run_task(
     task_instructions = load_task_instructions(task_dir)
     resolved_geos_primer_path = (geos_primer_path or DEFAULT_GEOS_PRIMER_PATH).resolve()
     primer_workspace_path: Path | None = None
-    remove_workspace_geos_primer(result_dir)
+    if not lammps_mode:
+        remove_workspace_geos_primer(result_dir)
     cheatsheet_path = agent.get("cheatsheet_path")
     # Per-task cheatsheet support (MemP-style retrieval).
     # If `cheatsheet_path_template` is set, format with `{task}` to get
@@ -127,6 +137,7 @@ def run_task(
         plugin_enabled=_plugin_on,
         rag_enabled=_rag_on,
         supervisor_enabled=bool(agent.get("supervisor_enabled", False)),
+        lammps_mode=lammps_mode,
     )
     # If we're delivering the cheatsheet via the workspace (instead of system prompt),
     # drop the file into the result_dir so Docker bind-mounts it as /workspace/CHEATSHEET.md.
@@ -144,48 +155,56 @@ def run_task(
     )
     primer_delivery = "system_prompt" if primer_in_system_prompt else "disabled"
 
-    # Collect blocked files for this experiment.  Variant expansion blocks
-    # siblings like Foo_benchmark.xml when GT contains Foo_base.xml, and the
-    # RST path for this task (if mapped in example_pairs.jsonl) is blocked
-    # too so the source tutorial isn't readable.
+    # Collect blocked files for this experiment.
     blocked_xml_filenames: list[str] = []
+    blocked_in_filenames: list[str] = []
     blocked_rst_relpaths: list[str] = []
-    if ground_truth_dir is not None:
-        blocked = get_blocked_files_for_task(
-            task_name,
-            ground_truth_dir,
-            geos_source_dir=geos_root,
-        )
-        blocked_xml_filenames = blocked["blocked_xml_filenames"]
-        blocked_rst_relpaths = blocked["blocked_rst_paths"]
 
-    # Optional extra blocklist (e.g. extending a train-task run with all test-task blocked
-    # basenames so harvested trajectories don't see test-GT content — hygiene path for
-    # building memory artifacts; see RN-003 P2 #7).
-    if extra_blocked_xml_basenames:
-        before = set(blocked_xml_filenames)
-        blocked_xml_filenames = sorted(
-            set(blocked_xml_filenames) | {b.lower() for b in extra_blocked_xml_basenames}
-        )
-        added = len(blocked_xml_filenames) - len(before)
-        if added:
-            print(f"  [extra-blocklist] {added} additional XML basenames blocked for {task_name}")
-
-    # Create a per-task filtered copy of GEOS with blocked files excluded.
-    # This is the primary enforcement mechanism for file-read restrictions: the
-    # files simply don't exist in the agent's /geos_lib mount. Dry-runs skip the
-    # copy and only display the command shape.
-    cleanup_filtered_copy = False
-    if dry_run:
-        filtered_geos = geos_root
+    if lammps_mode:
+        # LAMMPS GT blocking: find *.in files in the per-task GT dir and pass
+        # them to the RAG server via EXCLUDED_GT_IN_FILENAMES. No file-system
+        # filtering is done — the whole LAMMPS lib is mounted read-only.
+        if ground_truth_dir is not None:
+            lammps_gt_dir = ground_truth_dir / task_name
+            if lammps_gt_dir.exists():
+                blocked_in_filenames = [
+                    p.name.lower()
+                    for p in lammps_gt_dir.iterdir()
+                    if p.is_file() and (p.name.lower().endswith(".in") or p.name.lower().startswith("in."))
+                ]
+        filtered_geos = lammps_root  # not actually mounted as /geos_lib; just a placeholder
+        cleanup_filtered_copy = False
     else:
-        filtered_geos = create_filtered_geos_copy(
-            geos_root,
-            blocked_xml_basenames=blocked_xml_filenames,
-            blocked_rst_relpaths=blocked_rst_relpaths,
-            tmp_parent=tmp_geos_parent or TEMP_GEOS_PARENT,
-        )
-        cleanup_filtered_copy = True
+        # GEOS path: variant expansion + RST blocking + filtered hardlink copy.
+        if ground_truth_dir is not None:
+            blocked = get_blocked_files_for_task(
+                task_name,
+                ground_truth_dir,
+                geos_source_dir=geos_root,
+            )
+            blocked_xml_filenames = blocked["blocked_xml_filenames"]
+            blocked_rst_relpaths = blocked["blocked_rst_paths"]
+
+        if extra_blocked_xml_basenames:
+            before = set(blocked_xml_filenames)
+            blocked_xml_filenames = sorted(
+                set(blocked_xml_filenames) | {b.lower() for b in extra_blocked_xml_basenames}
+            )
+            added = len(blocked_xml_filenames) - len(before)
+            if added:
+                print(f"  [extra-blocklist] {added} additional XML basenames blocked for {task_name}")
+
+        cleanup_filtered_copy = False
+        if dry_run:
+            filtered_geos = geos_root
+        else:
+            filtered_geos = create_filtered_geos_copy(
+                geos_root,
+                blocked_xml_basenames=blocked_xml_filenames,
+                blocked_rst_relpaths=blocked_rst_relpaths,
+                tmp_parent=tmp_geos_parent or TEMP_GEOS_PARENT,
+            )
+            cleanup_filtered_copy = True
 
     runner = agent.get("runner", "acpx")
     if runner == "claude_native":
@@ -224,32 +243,40 @@ def run_task(
                     raise FileNotFoundError(
                         f"supervisor spec missing: {supervisor_host_path}"
                     )
-            mcp_config_path = write_claude_mcp_config(
-                result_dir=result_dir,
-                blocked_xml_filenames=blocked_xml_filenames,
-                blocked_rst_relpaths=blocked_rst_relpaths,
-                enable_memory=bool(agent.get("memory_enabled", False)),
-                enable_noop=bool(agent.get("noop_mcp_enabled", False)),
-                enable_xmllint=bool(agent.get("xmllint_mcp_enabled", False)),
-                enable_rag=_rag_on,
-                enable_supervisor=supervisor_enabled,
-                supervisor_task_name=task_name,
-                supervisor_model=str(agent.get("supervisor_model", "deepseek-v4-flash")),
-                supervisor_base_url=str(agent.get("supervisor_base_url", "https://api.deepseek.com/v1")),
-                memory_variant=str(agent.get("memory_variant", "lexical")),
-                memory_items_host_path=(
-                    Path(agent["memory_items_path"]).resolve()
-                    if agent.get("memory_items_path") else None
-                ),
-                memory_embed_index_host_path=(
-                    Path(agent["memory_embed_index_path"]).resolve()
-                    if agent.get("memory_embed_index_path") else None
-                ),
-            )
-            # Separate kill switch so the hook can be in-settings but inert.
-            # Env var is forwarded to the container in build_claude_native_command.
             hook_enabled = bool(agent.get("stop_hook_enabled", True))
-            write_claude_settings(result_dir=result_dir, hook_enabled=hook_enabled)
+            if lammps_mode:
+                mcp_config_path = write_lammps_mcp_config(
+                    result_dir=result_dir,
+                    blocked_in_filenames=blocked_in_filenames,
+                    blocked_rst_relpaths=blocked_rst_relpaths,
+                    enable_rag=_rag_on,
+                    enable_lammps_validate=bool(agent.get("lammps_validate_mcp_enabled", False)),
+                )
+                write_lammps_claude_settings(result_dir=result_dir, hook_enabled=hook_enabled)
+            else:
+                mcp_config_path = write_claude_mcp_config(
+                    result_dir=result_dir,
+                    blocked_xml_filenames=blocked_xml_filenames,
+                    blocked_rst_relpaths=blocked_rst_relpaths,
+                    enable_memory=bool(agent.get("memory_enabled", False)),
+                    enable_noop=bool(agent.get("noop_mcp_enabled", False)),
+                    enable_xmllint=bool(agent.get("xmllint_mcp_enabled", False)),
+                    enable_rag=_rag_on,
+                    enable_supervisor=supervisor_enabled,
+                    supervisor_task_name=task_name,
+                    supervisor_model=str(agent.get("supervisor_model", "deepseek-v4-flash")),
+                    supervisor_base_url=str(agent.get("supervisor_base_url", "https://api.deepseek.com/v1")),
+                    memory_variant=str(agent.get("memory_variant", "lexical")),
+                    memory_items_host_path=(
+                        Path(agent["memory_items_path"]).resolve()
+                        if agent.get("memory_items_path") else None
+                    ),
+                    memory_embed_index_host_path=(
+                        Path(agent["memory_embed_index_path"]).resolve()
+                        if agent.get("memory_embed_index_path") else None
+                    ),
+                )
+                write_claude_settings(result_dir=result_dir, hook_enabled=hook_enabled)
         else:
             plugin_dir = None
         native_model = claude_model or agent.get("model") or DEFAULT_CLAUDE_MODEL
@@ -260,26 +287,43 @@ def run_task(
         # Agents can explicitly opt out via add_native_plugin_prefix=False.
         _add_prefix = bool(agent.get("add_native_plugin_prefix", enable_plugin))
         if _add_prefix:
-            native_prompt = f"{native_plugin_prefix()}{prompt}"
+            native_prompt = f"{native_plugin_prefix(lammps_mode=lammps_mode)}{prompt}"
         else:
             native_prompt = prompt
-        cmd = build_claude_native_command(
-            filtered_geos=filtered_geos,
-            result_dir=result_dir,
-            plugin_dir=plugin_dir,
-            vector_db_dir=runtime_vector_db_dir,
-            model=native_model,
-            system_prompt=system_prompt,
-            prompt=native_prompt,
-            enable_plugin=enable_plugin,
-            supervisor_spec_host_path=supervisor_host_path
-            if enable_plugin else None,
-        )
-        docker_env = build_claude_native_env(
-            blocked_xml_filenames=blocked_xml_filenames,
-            blocked_rst_relpaths=blocked_rst_relpaths,
-            vector_db_dir=vector_db_dir if enable_plugin else None,
-        )
+        if lammps_mode:
+            cmd = build_lammps_native_command(
+                lammps_lib_dir=lammps_root,
+                result_dir=result_dir,
+                plugin_dir=plugin_dir,
+                vector_db_dir=runtime_vector_db_dir,
+                model=native_model,
+                system_prompt=system_prompt,
+                prompt=native_prompt,
+                enable_plugin=enable_plugin,
+            )
+            docker_env = build_lammps_native_env(
+                blocked_in_filenames=blocked_in_filenames,
+                blocked_rst_relpaths=blocked_rst_relpaths,
+                vector_db_dir=vector_db_dir if enable_plugin else None,
+            )
+        else:
+            cmd = build_claude_native_command(
+                filtered_geos=filtered_geos,
+                result_dir=result_dir,
+                plugin_dir=plugin_dir,
+                vector_db_dir=runtime_vector_db_dir,
+                model=native_model,
+                system_prompt=system_prompt,
+                prompt=native_prompt,
+                enable_plugin=enable_plugin,
+                supervisor_spec_host_path=supervisor_host_path
+                if enable_plugin else None,
+            )
+            docker_env = build_claude_native_env(
+                blocked_xml_filenames=blocked_xml_filenames,
+                blocked_rst_relpaths=blocked_rst_relpaths,
+                vector_db_dir=vector_db_dir if enable_plugin else None,
+            )
 
         if dry_run:
             display = redact_command_for_display(cmd[:-1] + ["<prompt>"])
@@ -343,11 +387,18 @@ def run_task(
                 },
             )
             if enable_plugin:
-                preflight_claude_native_mcp(
-                    result_dir=result_dir,
-                    plugin_dir=plugin_dir,
-                    vector_db_dir=runtime_vector_db_dir,
-                )
+                if lammps_mode:
+                    preflight_lammps_mcp(
+                        result_dir=result_dir,
+                        plugin_dir=plugin_dir,
+                        vector_db_dir=runtime_vector_db_dir,
+                    )
+                else:
+                    preflight_claude_native_mcp(
+                        result_dir=result_dir,
+                        plugin_dir=plugin_dir,
+                        vector_db_dir=runtime_vector_db_dir,
+                    )
 
             attempt = 0
             current_cmd = cmd
@@ -392,18 +443,30 @@ def run_task(
                         },
                     )
                 retry_prompt = f"{native_prompt}{notice}"
-                current_cmd = build_claude_native_command(
-                    filtered_geos=filtered_geos,
-                    result_dir=result_dir,
-                    plugin_dir=plugin_dir,
-                    vector_db_dir=runtime_vector_db_dir,
-                    model=native_model,
-                    system_prompt=system_prompt,
-                    prompt=retry_prompt,
-                    enable_plugin=enable_plugin,
-                    supervisor_spec_host_path=supervisor_host_path
-                    if enable_plugin else None,
-                )
+                if lammps_mode:
+                    current_cmd = build_lammps_native_command(
+                        lammps_lib_dir=lammps_root,
+                        result_dir=result_dir,
+                        plugin_dir=plugin_dir,
+                        vector_db_dir=runtime_vector_db_dir,
+                        model=native_model,
+                        system_prompt=system_prompt,
+                        prompt=retry_prompt,
+                        enable_plugin=enable_plugin,
+                    )
+                else:
+                    current_cmd = build_claude_native_command(
+                        filtered_geos=filtered_geos,
+                        result_dir=result_dir,
+                        plugin_dir=plugin_dir,
+                        vector_db_dir=runtime_vector_db_dir,
+                        model=native_model,
+                        system_prompt=system_prompt,
+                        prompt=retry_prompt,
+                        enable_plugin=enable_plugin,
+                        supervisor_spec_host_path=supervisor_host_path
+                        if enable_plugin else None,
+                    )
                 _safe_write_json(
                     result_dir / "status.json",
                     {

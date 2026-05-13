@@ -48,3 +48,13 @@ NATIVE_CLAUDE_TOOLS = "default"
 NATIVE_CLAUDE_DISALLOWED_TOOLS = ("Skill", "AskUserQuestion")
 
 DEFAULT_TIMEOUT = 1200  # seconds per task (20 minutes)
+
+# ---------------------------------------------------------------------------
+# LAMMPS-specific constants (additive — GEOS paths above are unchanged)
+# ---------------------------------------------------------------------------
+DEFAULT_LAMMPS_LIB_DIR = Path("/data/shared/lammps_agent_data/data/lammps")
+CONTAINER_LAMMPS_LIB_DIR = Path("/lammps_lib")
+DEFAULT_LAMMPS_VECTOR_DB_DIR = Path("/data/shared/lammps_agent_data/data/vector_db")
+CONTAINER_LAMMPS_VECTOR_DB_DIR = Path("/data/shared/lammps_agent_data/data/vector_db")
+LAMMPS_EXPERIMENTS_DIR = DATA_DIR / "eval" / "experiments_lammps"
+LAMMPS_RAG_TOOL_NAMES = {"search_navigator", "search_technical", "search_commands"}

@@ -1,0 +1,3 @@
+Do not call the Skill tool. Use the LAMMPS RAG MCP tools directly: mcp__lammps-rag__search_navigator, mcp__lammps-rag__search_technical, and mcp__lammps-rag__search_commands. Before writing .in scripts, call at least one of the plugin RAG tools: search_navigator, search_technical, or search_commands.
+
+Use only real tool calls exposed by the runtime. Do not print XML-style <invoke> blocks, <parameter> blocks, DSML function-call blocks, or minimax:tool_call wrappers; those are text and will not execute. To create files, use the actual Write, Edit, or Bash tools exposed by the runtime, and write only under /workspace/inputs.

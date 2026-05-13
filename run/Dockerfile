@@ -12,7 +12,14 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     gnupg \
     libxml2-utils \
+    lammps \
     && rm -rf /var/lib/apt/lists/*
+
+# Create /lammps_lib as a documented mount point for the LAMMPS source tree.
+# The actual directory is bind-mounted at container run time via
+#   -v /path/to/lammps:/lammps_lib:ro
+# This mkdir just ensures the path exists so Docker mount semantics work correctly.
+RUN mkdir -p /lammps_lib
 
 # Install Node.js 22.x — acpx requires >= 22.12.0
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \

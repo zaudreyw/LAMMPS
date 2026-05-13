@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .constants import (
+    CONTAINER_LAMMPS_VECTOR_DB_DIR,
     CONTAINER_MCP_CONFIG_PATH,
     CONTAINER_PLUGIN_DIR,
     CONTAINER_SETTINGS_PATH,
@@ -240,6 +241,100 @@ def write_claude_mcp_config(
                 # Fixed inside the container — the schema lives next to the
                 # filtered GEOS source mount.
                 "XMLLINT_SCHEMA_PATH": "/geos_lib/src/coreComponents/schema/schema.xsd",
+            },
+        }
+    mcp_config_path = result_dir / CONTAINER_MCP_CONFIG_PATH.name
+    _safe_write_json(mcp_config_path, {"mcpServers": servers})
+    return mcp_config_path
+
+
+# ---------------------------------------------------------------------------
+# LAMMPS variants
+# (additive — GEOS functions above are unchanged)
+# ---------------------------------------------------------------------------
+
+def write_lammps_claude_settings(*, result_dir: Path, hook_enabled: bool) -> Path:
+    """Write claude_settings.json wiring the LAMMPS Stop + PostToolUse hooks.
+
+    plugin_lammps/ is mounted at /plugins/repo3 (same container path as the GEOS
+    plugin), so CONTAINER_PLUGIN_DIR already resolves correctly.
+    """
+    container_stop_hook = CONTAINER_PLUGIN_DIR / "hooks" / "verify_outputs.py"
+    container_post_hook = CONTAINER_PLUGIN_DIR / "hooks" / "verify_lammps_post_write.py"
+    settings: dict[str, Any] = {}
+    if hook_enabled:
+        hooks_cfg: dict[str, Any] = {
+            "Stop": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"python3 {container_stop_hook}",
+                            "timeout": 30,
+                        }
+                    ],
+                }
+            ],
+        }
+        if _envflag("LAMMPS_HOOK_POSTTOOLUSE"):
+            hooks_cfg["PostToolUse"] = [
+                {
+                    "matcher": "Write|Edit|MultiEdit",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"python3 {container_post_hook}",
+                            "timeout": 15,
+                        }
+                    ],
+                }
+            ]
+        settings["hooks"] = hooks_cfg
+    path = result_dir / CONTAINER_SETTINGS_PATH.name
+    _safe_write_json(path, settings)
+    return path
+
+
+def write_lammps_mcp_config(
+    *,
+    result_dir: Path,
+    blocked_in_filenames: list[str],
+    blocked_rst_relpaths: list[str],
+    enable_rag: bool = True,
+    enable_lammps_validate: bool = False,
+) -> Path:
+    """Write the MCP config for LAMMPS runs — registers lammps-rag and optionally lammps-validate."""
+    servers: dict[str, Any] = {}
+    if enable_rag:
+        servers["lammps-rag"] = {
+            "type": "stdio",
+            "command": "uv",
+            "args": [
+                "run",
+                "--script",
+                str(CONTAINER_PLUGIN_DIR / "scripts" / "lammps_rag_mcp.py"),
+            ],
+            "env": {
+                "CLAUDE_PLUGIN_ROOT": str(CONTAINER_PLUGIN_DIR),
+                "LAMMPS_VECTOR_DB_DIR": str(CONTAINER_LAMMPS_VECTOR_DB_DIR),
+                "EXCLUDED_GT_IN_FILENAMES": json.dumps(blocked_in_filenames),
+                "EXCLUDED_RST_PATHS": json.dumps(blocked_rst_relpaths),
+            },
+        }
+    if enable_lammps_validate:
+        servers["lammps-validate"] = {
+            "type": "stdio",
+            "command": "uv",
+            "args": [
+                "run",
+                "--script",
+                str(CONTAINER_PLUGIN_DIR / "scripts" / "lammps_validate_mcp.py"),
+            ],
+            "env": {
+                "CLAUDE_PLUGIN_ROOT": str(CONTAINER_PLUGIN_DIR),
+                # LAMMPS_BINARY forwarded from docker env (binary is installed in the image).
+                "LAMMPS_BINARY": os.environ.get("LAMMPS_BINARY", "lammps"),
             },
         }
     mcp_config_path = result_dir / CONTAINER_MCP_CONFIG_PATH.name

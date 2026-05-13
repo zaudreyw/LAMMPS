@@ -530,6 +530,82 @@ AGENTS: dict[str, dict] = {
         "plugin_enabled": True,
         "cheatsheet_path": REPO_ROOT / "plugin" / "memory_primer_m4g.md",
     },
+    # =========================================================================
+    # LAMMPS agents
+    # All entries carry lammps_mode=True so the orchestrator routes them
+    # through the LAMMPS docker/MCP/settings path instead of the GEOS path.
+    # Use with --agents-md-path run/AGENTS_lammps.md
+    #          --plugin-dir plugin_lammps
+    #          --vector-db-dir /data/shared/lammps_agent_data/data/vector_db
+    #          --lammps-lib-dir /path/to/lammps
+    # =========================================================================
+
+    # Baseline: no plugin, no RAG, no hook.
+    "lammps_vanilla": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_vanilla",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": DEFAULT_CLAUDE_MODEL,
+        "requires_rag": False,
+        "plugin_enabled": False,
+        "lammps_mode": True,
+    },
+    # Full stack: LAMMPS RAG MCP + structural Stop hook + PostToolUse hook.
+    "lammps_plugin": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_plugin",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": DEFAULT_CLAUDE_MODEL,
+        "requires_rag": True,
+        "plugin_enabled": True,
+        "lammps_mode": True,
+    },
+    # Full stack + lammps-validate MCP tool (agent can call validate_lammps_input mid-task).
+    "lammps_plugin_validate": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_plugin_validate",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": DEFAULT_CLAUDE_MODEL,
+        "requires_rag": True,
+        "plugin_enabled": True,
+        "lammps_validate_mcp_enabled": True,
+        "lammps_mode": True,
+    },
+    # RAG on, Stop hook off — ablation for hook contribution.
+    "lammps_plugin_no_hook": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_plugin_no_hook",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": DEFAULT_CLAUDE_MODEL,
+        "requires_rag": True,
+        "plugin_enabled": True,
+        "stop_hook_enabled": False,
+        "lammps_mode": True,
+    },
+    # RAG off, Stop hook on — ablation for RAG contribution.
+    "lammps_plugin_no_rag": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_plugin_no_rag",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": DEFAULT_CLAUDE_MODEL,
+        "requires_rag": False,
+        "plugin_enabled": True,
+        "rag_enabled": False,
+        "lammps_mode": True,
+    },
+    # validate MCP only (no RAG) — ablation for validate-tool contribution.
+    "lammps_plugin_validate_no_rag": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_plugin_validate_no_rag",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": DEFAULT_CLAUDE_MODEL,
+        "requires_rag": False,
+        "plugin_enabled": True,
+        "rag_enabled": False,
+        "lammps_validate_mcp_enabled": True,
+        "lammps_mode": True,
+    },
+
     "cursor_composer2": {
         "runner": "acpx",
         "acpx_name": "cursor",

@@ -1,0 +1,29 @@
+{
+  "description": "LAMMPS input-file self-verification hooks. Stop hook (verify_outputs.py) blocks end_turn when /workspace/inputs/ is missing .in files or files fail the structural check (missing units/atom_style/run). PostToolUse hook (verify_lammps_post_write.py) catches structural problems immediately after each Write|Edit|MultiEdit so the agent gets feedback within seconds instead of at end-of-turn.",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/verify_outputs.py",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/verify_lammps_post_write.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

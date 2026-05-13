@@ -74,11 +74,14 @@ from .constants import (
     DEFAULT_CLAUDE_MODEL,
     DEFAULT_GEOS_LIB_DIR,
     DEFAULT_GEOS_PRIMER_PATH,
+    DEFAULT_LAMMPS_LIB_DIR,
+    DEFAULT_LAMMPS_VECTOR_DB_DIR,
     DEFAULT_PLUGIN_DIR,
     DEFAULT_TIMEOUT,
     DEFAULT_VECTOR_DB_DIR,
     EXPERIMENTS_DIR,
     GROUND_TRUTH_DIR,
+    LAMMPS_EXPERIMENTS_DIR,
     TEMP_GEOS_PARENT,
 )
 from .dashboard.server import start_dashboard_server
@@ -209,14 +212,22 @@ def main() -> None:
              f"a `# GEOS Primer` section, OR when --strip-baked-primer is set.",
     )
     parser.add_argument(
+        "--agents-md-path",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path to the AGENTS.md system-prompt file. "
+             "Defaults to run/AGENTS.md. Pass run/AGENTS_lammps.md to use "
+             "the LAMMPS harness system prompt.",
+    )
+    parser.add_argument(
         "--strip-baked-primer",
         action="store_true",
         default=False,
-        help="Strip the embedded `# GEOS Primer` section out of run/AGENTS.md "
-             "before injecting it as system context, so the file passed via "
-             "--geos-primer-path is actually inlined. Use this for any primer "
-             "ablation (the default AGENTS.md already contains the standard "
-             "primer baked in, which suppresses the external primer file).",
+        help="Strip the embedded primer section (# GEOS Primer or # LAMMPS Primer) "
+             "out of AGENTS.md before injecting it as system context, so the file "
+             "passed via --geos-primer-path is actually inlined. Use this for any "
+             "primer ablation.",
     )
     parser.add_argument(
         "--claude-model",
@@ -272,6 +283,15 @@ def main() -> None:
              f"(default: {DEFAULT_GEOS_LIB_DIR})",
     )
     parser.add_argument(
+        "--lammps-lib-dir",
+        type=Path,
+        default=DEFAULT_LAMMPS_LIB_DIR,
+        metavar="DIR",
+        help=f"LAMMPS source tree mounted read-only at /lammps_lib in Docker. "
+             f"Only used when running lammps_mode agents. "
+             f"(default: {DEFAULT_LAMMPS_LIB_DIR})",
+    )
+    parser.add_argument(
         "--force-unlock",
         action="store_true",
         help="Override the per-run PID lock if a stale or zombie lockfile is "
@@ -315,13 +335,27 @@ def main() -> None:
             )
             sys.exit(1)
 
+    selected_lammps_agents = [
+        k for k in args.agents if AGENTS[k].get("lammps_mode")
+    ]
+    selected_geos_agents = [
+        k for k in args.agents if not AGENTS[k].get("lammps_mode")
+    ]
     if not args.dry_run and not args.dashboard_only:
-        if not geos_lib_resolved.is_dir():
+        if selected_geos_agents and not geos_lib_resolved.is_dir():
             print(
                 f"{C.FAIL}Error: GEOS source dir not found: {geos_lib_resolved}. "
                 f"Set --geos-lib-dir to your GEOS checkout.{C.ENDC}"
             )
             sys.exit(1)
+        if selected_lammps_agents:
+            lammps_lib_resolved = args.lammps_lib_dir.resolve()
+            if not lammps_lib_resolved.is_dir():
+                print(
+                    f"{C.FAIL}Error: LAMMPS source dir not found: {lammps_lib_resolved}. "
+                    f"Set --lammps-lib-dir to your LAMMPS checkout.{C.ENDC}"
+                )
+                sys.exit(1)
 
     if not args.dashboard_only and not args.geos_primer_path.exists():
         print(
@@ -375,7 +409,10 @@ def main() -> None:
             for task in tasks
         }
 
-    agents_context = load_agents_md(strip_baked_primer=args.strip_baked_primer)
+    agents_context = load_agents_md(
+        strip_baked_primer=args.strip_baked_primer,
+        agents_md_path=args.agents_md_path,
+    )
     combos = [(task, agent) for task in tasks for agent in args.agents]
 
     # Show where results will land
@@ -497,6 +534,7 @@ def main() -> None:
             claude_model=args.claude_model,
             tmp_geos_parent=args.tmp_geos_parent,
             geos_lib_dir=geos_lib_resolved,
+            lammps_lib_dir=args.lammps_lib_dir.resolve(),
             extra_blocked_xml_basenames=extra_blocked_xml_basenames,
             supervisor_spec_dir=args.supervisor_spec_dir,
         ): (task, agent)

@@ -30,35 +30,40 @@ def _envflag(name: str, default: bool = False) -> bool:
 
 _RAG_INSTRUCTIONS_PLUGIN = _load("rag_instructions.txt")
 _RAG_INSTRUCTIONS_VANILLA = _load("rag_vanilla.txt")
+_RAG_INSTRUCTIONS_LAMMPS_PLUGIN = _load("rag_instructions_lammps.txt")
 _MEMORY_INSTRUCTIONS = _load("memory_instructions.txt")
 _REAL_TOOL_TAIL = _load("real_tool_tail.txt")
 _NATIVE_PLUGIN_PREFIX = _load("native_plugin_prefix.txt")
+_NATIVE_PLUGIN_PREFIX_LAMMPS = _load("native_plugin_prefix_lammps.txt")
 _PSEUDO_TOOL_RETRY = _load("pseudo_tool_retry.txt")
 _NO_OUTPUTS_RETRY = _load("no_outputs_retry.txt")
 _MISSING_RAG_DISCLAIMER = _load("missing_rag_disclaimer.txt")
 
 
-def load_agents_md(strip_baked_primer: bool = False) -> str:
-    """Load run/AGENTS.md.
+def load_agents_md(
+    strip_baked_primer: bool = False,
+    agents_md_path: Path | None = None,
+) -> str:
+    """Load an AGENTS.md file.
 
-    AGENTS.md historically embedded a `# GEOS Primer` section after the
-    operational role/rules. ``build_system_prompt`` suppresses any external
-    primer when this section is already present, so the primer file passed
-    via ``--geos-primer-path`` was effectively never inlined.
+    ``agents_md_path`` lets the caller point at any AGENTS.md variant
+    (e.g. ``run/AGENTS_lammps.md`` for the LAMMPS harness). Defaults to
+    ``run/AGENTS.md`` for backwards compatibility.
 
-    Pass ``strip_baked_primer=True`` to drop the embedded primer block (the
-    `# GEOS Primer` heading and everything after it). The external primer
-    file then takes its place. This is what enables a real primer ablation.
+    ``strip_baked_primer=True`` drops the first section whose heading starts
+    with ``# `` followed by ``Primer`` (case-insensitive) and everything
+    after it, allowing an external primer file to be injected instead.
     """
-    path = RUN_ASSETS_DIR / "AGENTS.md"
+    path = agents_md_path if agents_md_path is not None else RUN_ASSETS_DIR / "AGENTS.md"
     if not path.exists():
         raise FileNotFoundError(f"AGENTS.md not found at {path}")
     text = path.read_text()
     if strip_baked_primer:
-        marker = "\n# GEOS Primer"
-        idx = text.find(marker)
-        if idx >= 0:
-            text = text[:idx].rstrip() + "\n"
+        # Support both "# GEOS Primer" and "# LAMMPS Primer" headings.
+        import re
+        m = re.search(r"\n# [^\n]*Primer", text, re.IGNORECASE)
+        if m:
+            text = text[: m.start()].rstrip() + "\n"
     return text
 
 
@@ -112,12 +117,17 @@ def build_system_prompt(
     plugin_enabled: bool = True,
     rag_enabled: bool | None = None,
     supervisor_enabled: bool = False,
+    lammps_mode: bool = False,
 ) -> tuple[str, bool]:
     if rag_enabled is None:
         rag_enabled = plugin_enabled
     primer_text = ""
     primer_inlined = False
-    if geos_primer_path.exists() and "# GEOS Primer" not in agents_context:
+    if lammps_mode:
+        # LAMMPS: primer is baked into AGENTS_lammps.md; never inject the GEOS primer.
+        if "# LAMMPS Primer" in agents_context:
+            primer_inlined = True
+    elif geos_primer_path.exists() and "# GEOS Primer" not in agents_context:
         primer_text = (
             "\n\n---\n"
             "# GEOS Primer\n\n"
@@ -142,7 +152,10 @@ def build_system_prompt(
             if body:
                 cheatsheet_text = f"\n\n---\n{body}\n"
 
-    rag_instructions = _RAG_INSTRUCTIONS_PLUGIN if rag_enabled else _RAG_INSTRUCTIONS_VANILLA
+    if lammps_mode:
+        rag_instructions = _RAG_INSTRUCTIONS_LAMMPS_PLUGIN if rag_enabled else ""
+    else:
+        rag_instructions = _RAG_INSTRUCTIONS_PLUGIN if rag_enabled else _RAG_INSTRUCTIONS_VANILLA
 
     memory_instructions = (
         _MEMORY_INSTRUCTIONS
@@ -179,9 +192,9 @@ def build_system_prompt(
     ), primer_inlined
 
 
-def native_plugin_prefix() -> str:
+def native_plugin_prefix(lammps_mode: bool = False) -> str:
     """Prefix prepended to the prompt when the plugin is enabled (native runner)."""
-    return _NATIVE_PLUGIN_PREFIX
+    return _NATIVE_PLUGIN_PREFIX_LAMMPS if lammps_mode else _NATIVE_PLUGIN_PREFIX
 
 
 def pseudo_tool_retry_prompt(previous_status: str, counts: dict[str, Any]) -> str:
