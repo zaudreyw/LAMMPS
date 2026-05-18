@@ -14,8 +14,11 @@ from typing import Any
 
 from .contamination import (
     cleanup_filtered_geos_copy,
+    cleanup_filtered_lammps_copy,
     create_filtered_geos_copy,
+    create_filtered_lammps_copy,
     get_blocked_files_for_task,
+    get_blocked_in_files_for_task,
 )
 
 from .agents import AGENTS
@@ -39,6 +42,7 @@ from .constants import (
     DOCKER_IMAGE,
     GEOS_LIB_DIR,
     TEMP_GEOS_PARENT,
+    TEMP_LAMMPS_PARENT,
 )
 from .docker_cmd import (
     build_claude_native_command,
@@ -161,19 +165,32 @@ def run_task(
     blocked_rst_relpaths: list[str] = []
 
     if lammps_mode:
-        # LAMMPS GT blocking: find *.in files in the per-task GT dir and pass
-        # them to the RAG server via EXCLUDED_GT_IN_FILENAMES. No file-system
-        # filtering is done — the whole LAMMPS lib is mounted read-only.
-        if ground_truth_dir is not None:
-            lammps_gt_dir = ground_truth_dir / task_name
-            if lammps_gt_dir.exists():
-                blocked_in_filenames = [
-                    p.name.lower()
-                    for p in lammps_gt_dir.iterdir()
-                    if p.is_file() and (p.name.lower().endswith(".in") or p.name.lower().startswith("in."))
-                ]
-        filtered_geos = lammps_root  # not actually mounted as /geos_lib; just a placeholder
+        # LAMMPS decontamination:
+        #   1. RAG-level: GT .in basenames are passed via EXCLUDED_GT_IN_FILENAMES so
+        #      the RAG server filters them from search results.
+        #   2. Filesystem-level: a hardlink copy of the LAMMPS source is created with
+        #      the source .in files (tracked in lammps_example_pairs.jsonl) removed,
+        #      so the agent cannot read them via Bash/Read either.
+        #   Both layers are needed to decontaminate RAG vs. agentic file navigation.
+        filtered_lammps: Path | None = None
         cleanup_filtered_copy = False
+        if ground_truth_dir is not None:
+            lammps_blocked = get_blocked_in_files_for_task(task_name, ground_truth_dir)
+            blocked_in_filenames = lammps_blocked["blocked_in_basenames"]
+            blocked_source_relpaths = lammps_blocked["blocked_in_source_relpaths"]
+        else:
+            blocked_source_relpaths = []
+
+        if not dry_run and blocked_source_relpaths:
+            filtered_lammps = create_filtered_lammps_copy(
+                lammps_root,
+                blocked_in_source_relpaths=blocked_source_relpaths,
+                tmp_parent=TEMP_LAMMPS_PARENT,
+            )
+            cleanup_filtered_copy = True
+
+        lammps_mount_dir = filtered_lammps if filtered_lammps is not None else lammps_root
+        filtered_geos = lammps_mount_dir  # reused for cleanup in the finally block
     else:
         # GEOS path: variant expansion + RST blocking + filtered hardlink copy.
         if ground_truth_dir is not None:
@@ -292,7 +309,7 @@ def run_task(
             native_prompt = prompt
         if lammps_mode:
             cmd = build_lammps_native_command(
-                lammps_lib_dir=lammps_root,
+                lammps_lib_dir=lammps_mount_dir,
                 result_dir=result_dir,
                 plugin_dir=plugin_dir,
                 vector_db_dir=runtime_vector_db_dir,
@@ -445,7 +462,7 @@ def run_task(
                 retry_prompt = f"{native_prompt}{notice}"
                 if lammps_mode:
                     current_cmd = build_lammps_native_command(
-                        lammps_lib_dir=lammps_root,
+                        lammps_lib_dir=lammps_mount_dir,
                         result_dir=result_dir,
                         plugin_dir=plugin_dir,
                         vector_db_dir=runtime_vector_db_dir,
@@ -503,7 +520,10 @@ def run_task(
             if cleanup_vector_db_copy:
                 shutil.rmtree(runtime_vector_db_dir, ignore_errors=True)
             if cleanup_filtered_copy:
-                cleanup_filtered_geos_copy(filtered_geos)
+                if lammps_mode:
+                    cleanup_filtered_lammps_copy(filtered_geos)
+                else:
+                    cleanup_filtered_geos_copy(filtered_geos)
 
     model = agent.get("model")
     api_key = os.environ.get(agent["api_key_env"], "")

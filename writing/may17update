@@ -1,0 +1,58 @@
+# LAMMPS Example Mining Report — 2026-05-17
+
+## (Input, Output) Example List
+
+| Task | Input (`instructions.txt`) | Output (GT `.in` file) | Auxiliary GT files |
+|---|---|---|---|
+| `lj_melt` | LJ argon melt, FCC 4x4x4, NVE→NVT at T=1.44, 2000 steps | `experiments_lammps_gt/lj_melt/inputs/in.lj_melt` | — |
+| `crack_2d` | 2D crack propagation in LJ solid, pre-existing notch, fix move loading | `experiments_lammps_gt/crack_2d/inputs/in.crack_2d` | — |
+| `nvt_water` | 216 SPC/E water molecules, real units, PPPM, SHAKE, NVT 300 K | `experiments_lammps_gt/nvt_water/inputs/in.nvt_water` | `water.data`, `gen_water_data.py` |
+| `lj_melt_minimal` | Shorter version of lj_melt (3-line spec) | **NO ground truth** | — |
+
+---
+
+## Mining Method
+
+**LAMMPS: fully hand-authored.** There is no mining script. The 4 tasks were written manually
+to cover distinct physics scenarios (simple MD, crack mechanics, electrostatics/constraints).
+No equivalent of `example_pairs.jsonl` exists.
+
+The only automated indexing in the LAMMPS plugin is `build_lammps_vector_db.py` → `_in_files()`,
+which recursively scans the LAMMPS source `examples/` tree for any file named `in.*` or `*.in`
+and indexes them into the `lammps_technical` ChromaDB collection — but that is purely for RAG
+retrieval, not for building eval tasks.
+
+### GEOS comparison — key differences
+
+| Dimension | GEOS | LAMMPS |
+|---|---|---|
+| Task origin | Mined from RST tutorial pages in GEOS docs | Hand-authored by developer |
+| Source mapping | `example_pairs.jsonl` (task_id → RST path) | None |
+| Contamination blocking | GT XML basenames + variant siblings + source RST page | None (no contamination module for LAMMPS) |
+| Variant expansion | 9 XML suffix patterns (`_base`, `_smoke`, `_benchmark`, etc.) | N/A — `.in` files have no naming convention for variants |
+| GT files | Actual files from GEOS source tree | Manually written reference scripts |
+| Scale | Enough tasks for a full matrix eval | 4 tasks |
+
+---
+
+## Counts
+
+| Item | Count |
+|---|---|
+| Total eval tasks | 4 |
+| Tasks with ground truth | 3 |
+| Tasks without ground truth | 1 (`lj_melt_minimal`) |
+| GT `.in` files | 3 |
+| GT auxiliary files (data/py) | 2 (`water.data`, `gen_water_data.py`) |
+| Structural check tasks defined | 3 (lj_melt, nvt_water, crack_2d — in `scripts/eval/batch_lammps_evaluate.py`) |
+| RAG-indexed `.in` examples from LAMMPS source | Depends on LAMMPS version; `_in_files()` does full recursive scan of `examples/` — typically 200–500+ files in a full LAMMPS source tree |
+
+---
+
+## Key Gaps vs. GEOS
+
+- No automated miner: all 4 tasks were hand-written vs. GEOS's RST-based extraction pipeline.
+- `lj_melt_minimal` has no ground truth — can only be evaluated structurally, not with LLM judge.
+- No contamination blocking: if a LAMMPS library is mounted, the agent can read the exact `.in`
+  files the tasks were inspired by (no hardlink-copy sanitization equivalent).
+- No `example_pairs.jsonl`: no tracking of which source `.in` file each task was derived from.

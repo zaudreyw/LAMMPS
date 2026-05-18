@@ -58,3 +58,7 @@ DEFAULT_LAMMPS_VECTOR_DB_DIR = Path("/data/shared/lammps_agent_data/data/vector_
 CONTAINER_LAMMPS_VECTOR_DB_DIR = Path("/data/shared/lammps_agent_data/data/vector_db")
 LAMMPS_EXPERIMENTS_DIR = DATA_DIR / "eval" / "experiments_lammps"
 LAMMPS_RAG_TOOL_NAMES = {"search_navigator", "search_technical", "search_commands"}
+# Filtered LAMMPS trees (hardlink farms) are created here.
+# Must be on the same filesystem as --lammps-lib-dir for efficient hardlinks.
+TEMP_LAMMPS_PARENT = Path("/data/shared/lammps_agent_data/data/eval/tmp_lammps")
+DEFAULT_LAMMPS_EXAMPLE_PAIRS = DATA_DIR / "eval" / "lammps_example_pairs.jsonl"

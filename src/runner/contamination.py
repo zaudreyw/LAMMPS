@@ -301,3 +301,155 @@ def create_filtered_geos_copy(
 def cleanup_filtered_geos_copy(geos_copy: Path) -> None:
     """Remove the temp directory created by :func:`create_filtered_geos_copy`."""
     shutil.rmtree(geos_copy.parent, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# LAMMPS contamination
+#
+# Design note — RAG vs. Agentic File Navigation:
+#   The LAMMPS RAG server already excludes GT-corresponding filenames from
+#   search results via EXCLUDED_GT_IN_FILENAMES. This module provides the
+#   complementary filesystem-level decontamination: a hardlink copy of the
+#   LAMMPS source tree with the exact source .in files removed, so the agent
+#   cannot read them via Bash/Read either. Together these two mechanisms ensure
+#   that the RAG path and the file-navigation path are both decontaminated.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_LAMMPS_EXAMPLE_PAIRS = Path(
+    __import__("os").environ.get(
+        "LAMMPS_EXAMPLE_PAIRS",
+        str(Path(__file__).resolve().parents[2] / "data" / "eval" / "lammps_example_pairs.jsonl"),
+    )
+)
+
+
+def _load_lammps_example_pairs(pairs_path: Path | None = None) -> dict[str, list[str]]:
+    """Load ``task_id`` → list of LAMMPS source .in relpaths from JSONL file."""
+    path = Path(pairs_path or _DEFAULT_LAMMPS_EXAMPLE_PAIRS)
+    if not path.exists():
+        logger.warning("lammps_example_pairs.jsonl not found at %s", path)
+        return {}
+    mappings: dict[str, list[str]] = {}
+    with path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            task_id = str(record.get("task_id", "")).strip()
+            relpaths = record.get("lammps_example_relpaths", [])
+            if task_id and relpaths:
+                mappings[task_id] = [str(p) for p in relpaths]
+    return mappings
+
+
+def get_blocked_in_files_for_task(
+    task_id: str,
+    ground_truth_dir: str | Path,
+    *,
+    lammps_example_pairs_path: str | Path | None = None,
+) -> dict[str, list[str]]:
+    """Return .in files to hide from the agent for *task_id* in LAMMPS mode.
+
+    Returns
+    -------
+    dict with:
+
+    - ``blocked_in_basenames`` — lowercased .in basenames from the GT dir
+      (passed to the RAG server via EXCLUDED_GT_IN_FILENAMES).
+    - ``blocked_in_source_relpaths`` — paths relative to the LAMMPS source root
+      to remove from the filesystem copy (from lammps_example_pairs.jsonl).
+    """
+    gt_dir = Path(ground_truth_dir) / task_id
+    blocked_basenames: list[str] = []
+    if gt_dir.exists():
+        blocked_basenames = sorted({
+            p.name.lower()
+            for p in gt_dir.rglob("*")
+            if p.is_file() and (p.name.lower().endswith(".in") or p.name.lower().startswith("in."))
+        })
+
+    pairs = _load_lammps_example_pairs(
+        Path(lammps_example_pairs_path) if lammps_example_pairs_path else None
+    )
+    source_relpaths = pairs.get(task_id, [])
+
+    return {
+        "blocked_in_basenames": blocked_basenames,
+        "blocked_in_source_relpaths": source_relpaths,
+    }
+
+
+def create_filtered_lammps_copy(
+    lammps_src: Path,
+    *,
+    blocked_in_source_relpaths: Iterable[str] = (),
+    tmp_parent: Path,
+) -> Path:
+    """Hardlink-copy *lammps_src* into a fresh temp dir, omitting blocked .in files.
+
+    Parameters
+    ----------
+    lammps_src:
+        LAMMPS source tree to mirror.
+    blocked_in_source_relpaths:
+        Paths relative to *lammps_src* to exclude
+        (e.g. ``'examples/melt/in.melt'``).
+    tmp_parent:
+        Directory under which the unique temp copy is created. Should be on
+        the same filesystem as *lammps_src* for efficient hardlinks.
+
+    Returns
+    -------
+    Path to the sanitized LAMMPS root at
+    ``<tmp_parent>/lammps_eval_<rand>/lammps``.
+    Pass to :func:`cleanup_filtered_lammps_copy` when done.
+    """
+    tmp_parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(dir=tmp_parent, prefix="lammps_eval_"))
+    lammps_dest = tmp_dir / "lammps"
+
+    blocked_norm = {
+        str(p).replace("\\", "/").lower()
+        for p in blocked_in_source_relpaths
+        if p
+    }
+
+    def _ignore(src_dir: str, names: list[str]) -> set[str]:
+        skipped: set[str] = set()
+        if not blocked_norm:
+            return skipped
+        for name in names:
+            try:
+                rel = (Path(src_dir) / name).relative_to(lammps_src)
+                if str(rel).replace("\\", "/").lower() in blocked_norm:
+                    skipped.add(name)
+            except ValueError:
+                pass
+        return skipped
+
+    def _hardlink_or_copy(src: str, dst: str) -> None:
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copy2(src, dst)
+
+    shutil.copytree(
+        lammps_src, lammps_dest,
+        ignore=_ignore,
+        copy_function=_hardlink_or_copy,
+        symlinks=True,
+    )
+    logger.info(
+        "Filtered LAMMPS copy: %s → %s (blocked %d relpaths)",
+        lammps_src, lammps_dest, len(blocked_norm),
+    )
+    return lammps_dest
+
+
+def cleanup_filtered_lammps_copy(lammps_copy: Path) -> None:
+    """Remove the temp directory created by :func:`create_filtered_lammps_copy`."""
+    shutil.rmtree(lammps_copy.parent, ignore_errors=True)

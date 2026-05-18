@@ -606,6 +606,44 @@ AGENTS: dict[str, dict] = {
         "lammps_mode": True,
     },
 
+    # =========================================================================
+    # LAMMPS cross-model cells — DeepSeek v4 flash via OpenRouter
+    # Model routes through ANTHROPIC_BASE_URL = https://openrouter.ai/api
+    # Use with same CLI flags as the standard lammps_* agents above.
+    # =========================================================================
+
+    # Baseline: DeepSeek v4 flash, no plugin/RAG/hook.
+    "lammps_deepseek_vanilla": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_deepseek_vanilla",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": "deepseek/deepseek-chat-v3-0324",  # deepseek v4 flash on OpenRouter
+        "requires_rag": False,
+        "plugin_enabled": False,
+        "lammps_mode": True,
+    },
+    # Full stack: LAMMPS RAG MCP + hooks, DeepSeek v4 flash.
+    "lammps_deepseek_plugin": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_deepseek_plugin",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "requires_rag": True,
+        "plugin_enabled": True,
+        "lammps_mode": True,
+    },
+    # RAG off, hook on — ablation for DeepSeek's file-navigation vs RAG.
+    "lammps_deepseek_no_rag": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_deepseek_no_rag",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "requires_rag": False,
+        "plugin_enabled": True,
+        "rag_enabled": False,
+        "lammps_mode": True,
+    },
+
     "cursor_composer2": {
         "runner": "acpx",
         "acpx_name": "cursor",
