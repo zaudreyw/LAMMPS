@@ -2,5 +2,5 @@
 
 --- RETRY AFTER NON-EXECUTED TOOL OUTPUT ---
 The previous attempt ended as {previous_status}. It printed pseudo tool invocations ({pseudo_summary}) as text. Those blocks did not execute and did not create files or call RAG. Retry from the beginning now.
-Use only real runtime tool calls. Do not print <invoke>, <parameter>, minimax:tool_call, or similar wrappers. If you need to write XML files, call the actual Write tool when it is available, otherwise use actual Edit or Bash tool calls. If RAG is required, call the actual geos-rag MCP tools.
+Use only real runtime tool calls. Do not print <invoke>, <parameter>, minimax:tool_call, or similar wrappers. If you need to write XML files, call the actual Write tool when it is available, otherwise use actual Edit or Bash tool calls. If a tool is not available as a real API tool call, do not attempt to invoke it at all — proceed without it.
 --- END RETRY NOTICE ---

@@ -46,3 +46,4 @@ misc/refs/
 # Analysis outputs (regenerable from scripts/analysis/*.py)
 scripts/analysis/out/**/*.csv
 scripts/analysis/out_4cond/**/*.csv
+.env

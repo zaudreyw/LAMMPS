@@ -50,6 +50,17 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Import grammar validator from sibling scripts/ directory
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+try:
+    from lammps_grammar_validate import load_grammar as _load_grammar
+    from lammps_grammar_validate import grammar_errors as _grammar_errors
+    _GRAMMAR = _load_grammar()
+    _GRAMMAR_AVAILABLE = True
+except ImportError:
+    _GRAMMAR_AVAILABLE = False
+    _GRAMMAR = {}
+
 MAX_ERRORS_PER_FILE = 8
 MAX_FILES_REPORTED = 4
 
@@ -350,6 +361,45 @@ def main() -> None:
             retries_so_far=retries,
             detail=summary[:500],
         )
+
+    # --- Tier 2.5: grammar check — unknown/misspelled commands and style names ---
+    if _GRAMMAR_AVAILABLE:
+        all_grammar_errors: list[tuple[Path, list[str]]] = []
+        for p in in_files:
+            errs = _grammar_errors(p, _GRAMMAR)
+            if errs:
+                all_grammar_errors.append((p, errs))
+
+        if all_grammar_errors:
+            retries = _bump_counter(counter)
+            if retries > max_retries:
+                _allow_stop(
+                    inputs_dir,
+                    reason_category="grammar_error_max_retries",
+                    retries_so_far=retries,
+                )
+            parts: list[str] = []
+            for p, errs in all_grammar_errors[:MAX_FILES_REPORTED]:
+                try:
+                    rel = p.relative_to(inputs_dir)
+                except (ValueError, AttributeError):
+                    rel = p
+                joined = "\n  ".join(errs[:MAX_ERRORS_PER_FILE])
+                parts.append(f"- {rel}:\n  {joined}")
+            summary = "\n".join(parts)
+            _block(
+                "Stop blocked by verify_outputs hook: one or more LAMMPS input "
+                f"scripts under {inputs_dir} contain unknown or misspelled "
+                f"commands/style names.\n\n{summary}\n\n"
+                "Check the command name spelling and style name against the "
+                "LAMMPS documentation. Common mistakes: 'lj_cut' should be "
+                "'lj/cut', 'nvt/nose-hoover' should be 'nvt', 'fix_nvt' "
+                "should be 'fix ... nvt'.",
+                inputs_dir=inputs_dir,
+                reason_category="grammar_error",
+                retries_so_far=retries,
+                detail=summary[:500],
+            )
 
     # --- Tier 3: optional LAMMPS binary check ---
     if _envflag("LAMMPS_HOOK_LAMMPS_CHECK"):

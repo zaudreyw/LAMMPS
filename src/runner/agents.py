@@ -632,6 +632,28 @@ AGENTS: dict[str, dict] = {
         "plugin_enabled": True,
         "lammps_mode": True,
     },
+    # Full stack + lammps-validate MCP tool, DeepSeek v4 flash.
+    "lammps_deepseek_plugin_validate": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_deepseek_plugin_validate",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "requires_rag": True,
+        "plugin_enabled": True,
+        "lammps_validate_mcp_enabled": True,
+        "lammps_mode": True,
+    },
+    # RAG on, Stop hook off — ablation for hook contribution, DeepSeek v4 flash.
+    "lammps_deepseek_no_hook": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_deepseek_no_hook",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "requires_rag": True,
+        "plugin_enabled": True,
+        "stop_hook_enabled": False,
+        "lammps_mode": True,
+    },
     # RAG off, hook on — ablation for DeepSeek's file-navigation vs RAG.
     "lammps_deepseek_no_rag": {
         "runner": "claude_native",
@@ -641,6 +663,18 @@ AGENTS: dict[str, dict] = {
         "requires_rag": False,
         "plugin_enabled": True,
         "rag_enabled": False,
+        "lammps_mode": True,
+    },
+    # validate MCP only (no RAG) — ablation for validate-tool contribution, DeepSeek v4 flash.
+    "lammps_deepseek_validate_no_rag": {
+        "runner": "claude_native",
+        "results_dir": DATA_DIR / "eval" / "lammps_deepseek_validate_no_rag",
+        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "requires_rag": False,
+        "plugin_enabled": True,
+        "rag_enabled": False,
+        "lammps_validate_mcp_enabled": True,
         "lammps_mode": True,
     },
 

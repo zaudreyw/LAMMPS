@@ -40,9 +40,16 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
+# Allow importing lammps_grammar_validate from the same scripts/ directory
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lammps_grammar_validate import load_grammar, grammar_errors as _grammar_errors
+
 from mcp.server.fastmcp import FastMCP
+
+_GRAMMAR = load_grammar()
 
 DEFAULT_WORKSPACE = Path(os.environ.get("LAMMPS_VALIDATE_WORKSPACE_DIR", "/workspace"))
 INPUTS_DIR = DEFAULT_WORKSPACE / "inputs"
@@ -202,6 +209,16 @@ def validate_lammps_input(in_path: str) -> str:
             f"{target}: FAILS structural validation\n"
             f"{body}\n"
             "Fix these issues before running the LAMMPS binary check."
+        )
+
+    # Tier 1.5: grammar check — unknown/misspelled command and style names
+    grammar_errs = _grammar_errors(target, _GRAMMAR)
+    if grammar_errs:
+        body = "\n".join(f"  - {e}" for e in grammar_errs)
+        return (
+            f"{target}: FAILS grammar validation\n"
+            f"{body}\n"
+            "Fix the unknown commands or style names above before re-validating."
         )
 
     # Tier 2: binary check
